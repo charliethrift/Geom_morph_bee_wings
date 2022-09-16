@@ -1,0 +1,620 @@
+---
+title: "Halictus_Wings_2022"
+author: "Charlie Thrift"
+date: '2022-08-28'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In this document, we analyze variation in wing morphologies between three species of _Halictus_ and two populations of _Halictus tripartitus_ using geometric morphometrics.
+
+Necessary inputs for this script include:
+(1) TPS files containing plotted landmark data for each wing photograph or "occurrence"
+(2) CSV file containing all bee occurrence data, eg. all Hymenoptera from CCBER's GBIF or Symbiota page. This is used to match the TPS wing occurrence with its proper species and population information.
+
+##Load Packages
+```{r packages, warning=FALSE, echo=FALSE, message=FALSE}
+library(tidyverse)
+library(ggbiplot)
+library(geomorph) #NOTE: download XQuartz if using a Mac
+library(vegan)
+library(devtools)
+library(stringr)
+library(caret)
+library(klaR)
+```
+
+##Load Data
+###Part One: TPS data
+The TPS data are in one file, which was created using tpsUtil32 and tps___(name of other program?)___. Here, we read these data and specify a few parameters for the readland.tps function. There are no curves to be read (readcurves=FALSE), and any negative values for landmarks are negative in Cartesian space (negNA=FALSE). If negNA were true, the function would read any negative landmarks as a missing landmark (this is because while landmarking, if a character is obscured you can "skip" landmarks within the landmarking software. We do not include any specimens missing any landmarks in this analysis).
+```{r}
+#Read in the TPS data for all bee wing images
+all_tps_data <- readland.tps("TPS_files/AppendedTPS_all_02sep22.TPS",
+                             specID = c("imageID"), readcurves = FALSE, 
+                             warnmsg = TRUE,negNA = FALSE)
+```
+
+###Part Two: Bee data
+Read bee data by first reading all Hymenoptera. After this chunk of code, all bee data is saved as __df1__ and is ready to be merged with the TPS data.
+```{r}
+#need to have "beedata26jun22.csv" saved in working directory
+all_CCBER_hymenoptera <- read_csv("beedata26jun22.csv")
+
+#clean up data. Only keep relevant columns
+df1 <- all_CCBER_hymenoptera
+df1 <- df1[,c("catalogNumber", "family", "genus", "scientificName",
+                   "decimalLatitude", "decimalLongitude", "eventDate",
+                   "day", "month", "year", "identifiedBy", "sex", "startDayOfYear")]
+#clean up data: prepare to match on catalogNumber
+df1 <- df1 %>% separate(catalogNumber, c("UCSB", "number")) #issue btwn _ vs - in catalogNumber
+df1 <- df1 %>% tidyr::unite('catalogNumber', sep = "_", c('UCSB','number')) #solving it by switching to _ from - in the downloaded Hymenoptera data
+```
+
+##Generalized Procrustes Analaysis (GPA)
+Run GPA on TPS data, to then generate coordinate data for each landmark on each specimen. In this code, we start with tps data and end with a CSV of coordinate data for each specimen. This can then be merged with the bee data generated above.
+```{r}
+all_tps_gpa <- gpagen(all_tps_data, PrinAxes = TRUE)
+
+write.csv(all_tps_gpa$coords, "all_tps_02sep22.csv", row.names = TRUE)
+write.csv(all_tps_gpa$Csize, "all_Csize_tps_02sep22.csv", row.names = TRUE)
+```
+
+##Merge Landmark Data with Bee Collection/Curation Data
+
+###Adjust the Landmark Data to usable format
+Read in the landmark data. Read in the Csize data for each specimen. Adjust each.
+```{r}
+lmdata <- read.csv("all_tps_02sep22.csv")
+Csize <- read.csv("all_Csize_tps_02sep22.csv")
+
+Csize1 <- Csize 
+Csize2 <- setNames(cbind(rownames(Csize1), Csize1, row.names = NULL), 
+         c("number_delete", "specimenID", "Csize")) #add row names
+Csize3 <- Csize2[,c(2:3)] #delete the first column (which is just numbering)
+
+df_transpose = t(lmdata) #transpose the landmark data
+df_transpose1 <- df_transpose
+df_transpose1 <- df_transpose1[c(2:961),]
+
+#Format of LM data is currently two rows per specimen
+#with one row being X coordinate values and one row
+#being Y coordinate values. Below, we split into two 
+#data frames and then stitch them back together to get
+#18 different variables for the 9 landmarks
+#(9 X coordinates and 9 Y coordinates)
+lm1 <- df_transpose1
+lmX <- lm1
+lmY <- lm1
+lmX1 <- lmX
+lmX1 <- data.frame(lmX1)
+lmX2 <- setNames(cbind(rownames(lmX1), lmX1, row.names = NULL),
+                 c("name", "LM1x", "LM2x", "LM3x",
+                   "LM4x", "LM5x", "LM6x", "LM7x", "LM8x", "LM9x"))
+lmXonly <- lmX2[str_detect(lmX2$name, "X.UCSB"), ]
+#repeat with Y
+lmY1 <- lmY
+lmY1 <- data.frame(lmY1)
+lmY2 <- setNames(cbind(rownames(lmY1), lmY1, row.names = NULL),
+                 c("name", "LM1y", "LM2y", "LM3y",
+                   "LM4y", "LM5y", "LM6y", "LM7y", "LM8y", "LM9y"))
+lmYonly <- lmY2[str_detect(lmY2$name, "Y.UCSB"), ]
+
+lmXonly1 <- lmXonly
+lmYonly1 <- lmYonly
+
+lmXonly2 <- lmXonly1 %>% 
+    tidyr::separate(name,                      
+                    c("X","UCSB", "barcode", "wing","species", 
+                      "location", "wingSide"), extra='drop') %>%
+    tidyr::unite('catalogNumber', c('UCSB','barcode')) 
+#drop any wings that were Right instead of Left
+lmXonly3 <- lmXonly2[lmXonly2$wingSide %in% c("ed", NA), ] #remove any "right" wings
+lmXonly4 <- lmXonly3[lmXonly3$species %in% c("edited", "far",
+                "lig", "tri"), ] #remove any "right" wings
+
+lmXonly5 <- lmXonly4[,c(2,7:15)]
+##now: lmXonly5 has x coordinate values for all 9 landmarks, and just the catalogNumber
+###repeat for Y
+lmYonly2 <- lmYonly1 %>% 
+    tidyr::separate(name,                      
+                    c("Y","UCSB", "barcode", "wing","species", 
+                      "location", "wingSide"), extra='drop') %>%
+    tidyr::unite('catalogNumber', c('UCSB','barcode')) 
+#drop any wings that were Right instead of Left
+lmYonly3 <- lmYonly2[lmYonly2$wingSide %in% c("ed", NA), ] #remove any "right" wings
+lmYonly4 <- lmYonly3[lmYonly3$species %in% c("edited", "far",
+                "lig", "tri"), ] #remove any "right" wings
+
+lmYonly5 <- lmYonly4[,c(2,7:15)]
+
+
+########
+#Now: unite the Y and X coordinate dataframes into just one
+lm_both <- merge(lmXonly5, lmYonly5, by=c("catalogNumber"))
+####Final step: add in the Csize column
+Csize4 <- Csize3
+Csize5 <- Csize4 %>% 
+    tidyr::separate(specimenID,                      
+                    c("UCSB", "barcode", "wing","species", 
+                      "location", "wingSide"), extra='drop') %>%
+    tidyr::unite('catalogNumber', c('UCSB','barcode')) 
+
+Csize6 <- Csize5[,c(1,6)]
+
+lm_both_size <- merge(lm_both, Csize6, by=c("catalogNumber"))
+####Done with landmark data. "lm" has each specimen and 18 variables for lm coordinates
+####plus 1 variable for Csize
+```
+
+###Merge Landmark and Curation Data
+```{r}
+lm_data <- merge(lm_both_size, df1, by=c("catalogNumber"))
+
+####removing some specimens from the analysis
+allsets_data123 <- lm_data
+##Need to drop the images with missing/obscured landmarks
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00041576")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00041646")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037403")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037414")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00038716")
+# drop: poor photo quality
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037491")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037465")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037432")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037425")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00012006")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00012259")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037414")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037403")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037397")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037386")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037356")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037336")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00036708")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00036688")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00035322")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00034772")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00030903")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00030503")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00030428")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00030379")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00030327")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00030289")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00030048")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00022211")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00021402")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00015171")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00012463")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00012424")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00012342")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00012277")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00012056")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00012049")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00012026")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00012018")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00041576")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00036237")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037365")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037381")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00036773")
+lm_data_clean <- allsets_data123
+#remove 2 rows that have only Hymenoptera as their sci name
+lm_data_clean <- subset(lm_data_clean, scientificName != "Hymenoptera")
+```
+
+##Summarizing Specimens
+```{r}
+lm <- lm_data_clean
+lm$scientificName <- as.factor(lm$scientificName)
+summary(lm$scientificName)
+
+lm$species[lm$scientificName == 
+             "Halictus tripartitus Cockerell, 1895"]<- "H. tripartitus"
+lm$species[lm$scientificName == 
+             "Halictus ligatus Say, 1837"]<- "H. ligatus"
+lm$species[lm$scientificName == 
+             "Halictus farinosus Smith, 1853"]<- "H. farinosus"
+lm$species <- as.factor(lm$species)
+summary(lm$species)
+
+lm$location[lm$decimalLatitude <= 34.234 & 
+                 lm$decimalLatitude >= 33.86 & 
+                 lm$decimalLongitude >= -120.05 & 
+                 lm$decimalLongitude <= -119.45]<- "Santa Cruz Island"
+lm$location[lm$decimalLatitude <= 36 & 
+                 lm$decimalLatitude >= 34.113887 & 
+                 lm$decimalLongitude >= -121 & 
+                 lm$decimalLongitude <= -116]<- "Mainland"
+lm$location <- as.factor(lm$location)
+summary(lm$location)
+
+lm <- subset(lm, location != "NA")
+
+ggplot(lm, aes(decimalLongitude, decimalLatitude)) +
+       geom_point(aes(color=location))
+
+## Check count of species and locations
+table(lm$species, lm$location)
+
+```
+## Create subset with equal numbers of specimesn
+```{r}
+table(lm$species, lm$location)
+
+lm_standard <- lm
+lm_ligatus <- subset(lm_standard, species == "H. ligatus")
+lm_tripartitus <- subset(lm_standard, species == "H. tripartitus")
+lm_farinosus <- subset(lm_standard, species == "H. farinosus")
+
+lm_ligatus_standard <- lm_ligatus[sample(nrow(lm_ligatus),size = 43), ]
+lm_tripartitus_standard <- lm_tripartitus[sample(nrow(lm_tripartitus),size = 43), ]
+lm_farinosus_standard <- lm_farinosus #because this is the lowest value already
+
+lm_standard_species <- rbind(lm_ligatus_standard, 
+                             lm_tripartitus_standard,
+                             lm_farinosus_standard)
+
+
+table(lm_standard_species$species, lm_standard_species$location)
+
+
+#now make a data frame with equal numbers of just h tripartitus by location
+table(lm_tripartitus$location)
+tri_main <- subset(lm_tripartitus, location == "Mainland")
+tri_island <- subset(lm_tripartitus, location == "Santa Cruz Island")
+
+##based on table, need to reduce mainland down to 149, to match island
+tri_main_standard <- tri_main[sample(nrow(tri_main),size = 149), ]
+tri_island_standard <- tri_island #because this is the lowest value already
+tri_data_standard <- rbind(tri_main_standard, tri_island_standard)
+table(tri_data_standard$location)
+```
+
+
+## Run Principal Component Analysis (PCA)
+Here, we run a principal component analysis on the coordinate data. 
+```{r}
+lm <- lm_standard_species #setting the LM data to be the one with the standardized
+##number of specimens per each species
+
+#Run PCA
+lm.pca <- prcomp(lm[,c(2:19)], #with 2:19 we drop Csize
+                       center = TRUE, scale. = TRUE)
+
+
+tri <- tri_data_standard #setting the tripartitus LM data to be the one with standard
+#number sizes per each location (149 each)
+
+#Run PCA
+tri.pca <- prcomp(tri[,c(2:19)], #with 2:19 we drop Csize
+                       center = TRUE, scale. = TRUE)
+```
+
+## Run Statistical Tests
+Here, we run the statistical tests for this project. First is the ANOSIM. This test uses the coordinate data as an input, and groups by species, to show if the groups are distinctly separate or not. ANOSIM test statistic close to 1 is highly different. A significance value lower than 0.05 is statistically significant.
+#### ANOSIM for Species
+```{r}
+#Now, also remove the text columns, so the ANOSIM can run on just the numerical data
+lm_anosim <- lm[, c(2:19)] #with 2:19 we drop Csize
+
+#Run ANOSIM
+##Here, run ANOSIM using Euclidean method
+anosim(lm_anosim, 
+       lm$species, 
+       distance = "euclidean", ##EUCLIDEAN
+       permutations = 999)
+##Here, run ANOSIM using Manhattan method
+#anosim(lm_anosim, 
+#       lm$species, 
+#       distance = "manhattan", ##MANHATTAN
+#       permutations = 999)
+```
+
+### ANOSIM for Location
+```{r}
+#Now, remove the text columns, so the ANOSIM can run on just the numerical data
+tri_anosim <- tri[, c(2:19)] #with 2:19 we drop Csize
+
+
+#Run ANOSIM
+##Here, run ANOSIM using Euclidean method
+anosim(tri_anosim, 
+       tri$location, 
+       distance = "euclidean", ##EUCLIDEAN
+       permutations = 999)
+##Here, run ANOSIM using Manhattan method
+anosim(tri_anosim, 
+       tri$location, 
+       distance = "manhattan", ##MANHATTAN
+       permutations = 999)
+```
+
+## Visualize PCA on Biplots
+```{r}
+ggbiplot(lm.pca,
+  ellipse = TRUE,  
+  labels=rownames(lm$species), 
+  var.axes = FALSE, 
+  alpha = 0.75,
+  groups=lm$species)+
+  ggtitle("Halictus PCA (by species)")+ 
+  theme_minimal()+
+  theme(legend.position = "bottom")+
+  scale_colour_manual(name="species", values= c("darkorchid",
+                                                "chartreuse4",
+                                                "red3"))
+```
+
+```{r}
+ggbiplot(tri.pca,
+  ellipse = TRUE,  
+  labels=rownames(tri$location), 
+  var.axes = FALSE, 
+  alpha = 0.75,
+  groups=tri$location)+
+  ggtitle("H. tripartitus PCA (by location)")+ 
+  theme_minimal()+
+  theme(legend.position = "bottom")+
+  scale_colour_manual(name="species", values= c("tan3", "cornflowerblue"))
+```
+
+## Cross Validation Tests
+Here, see if the computer can accurately assign "unknown" specimens to the correct species, or, to the correct location within a single species.
+```{r}
+
+lm_cross <- lm
+lm_cross <- lm_cross[, c(2:19, 33)] #use 2:19 to drop Csize
+#species cross validation test
+## Turn grouping column into a factor
+lm_cross$species <- as.factor(lm_cross$species)
+## Define training control
+set.seed(123)
+species_control <- trainControl(method = "repeatedcv", 
+                              number = 10, repeats = 3)
+# Train the model
+species_model <- train(species ~., data = lm_cross, method = "nb",
+               trControl = species_control)
+# Summarize the results
+print(species_model)
+confusionMatrix(species_model)
+
+
+####Cross Validation for Location
+tri_cross <- tri
+tri_cross <- tri_cross[,c(2:19, 34)] #use 2:19 to drop Csize
+## Turn grouping column into a factor
+tri_cross$location <- as.factor(tri_cross$location)
+## Define training control
+set.seed(123)
+location_control <- trainControl(method = "repeatedcv", 
+                              number = 10, repeats = 3)
+# Train the model
+location_model <- train(location ~., data = tri_cross, method = "nb",
+               trControl = location_control)
+# Summarize the results
+print(location_model)
+confusionMatrix(location_model)
+
+```
+## NMDS and Strength of Factors in LM data
+```{r}
+lm_nmds <- lm[ , c(2:19)] #use 2:19 to drop Csize
+lm_nmds_in <- as.matrix(lm_nmds) #switch to matrix
+lm_nmds_out <- metaMDS(lm_nmds_in, distance = "maha") #may want to pick a diff. distance matrix
+
+env2 <- lm_nmds
+en2 <- envfit(lm_nmds_out, env2, permutations = 999)
+en2$vectors
+
+
+## Repeat with just location in Tri
+tri_nmds <- tri[ , c(2:19)] #use 2:19 to drop Csize
+tri_nmds_in <- as.matrix(tri_nmds) #switch to matrix
+tri_nmds_out <- metaMDS(tri_nmds_in, distance = "maha") #may want to pick a diff. distance matrix
+
+env3 <- tri_nmds
+en3 <- envfit(tri_nmds_out, env3, permutations = 999)
+en3$vectors
+```
+
+
+## Make Tables for Mean Landmark Values
+```{r}
+main_mean <- tri_main_standard
+island_mean <- tri_island_standard
+
+tri_table <- data.frame(Landmark=(c("1x", "1y",
+                                    "2x", "2y",
+                                    "3x", "3y",
+                                    "4x", "4y",
+                                    "5x", "5y",
+                                    "6x", "6y",
+                                    "7x", "7y",
+                                    "8x", "8y",
+                                    "9x", "9y")),
+                        Rsquared=(c(en3[["vectors"]][["r"]][["LM1x"]],
+                                   en3[["vectors"]][["r"]][["LM1y"]],
+                                   en3[["vectors"]][["r"]][["LM2x"]],
+                                   en3[["vectors"]][["r"]][["LM2y"]],
+                                   en3[["vectors"]][["r"]][["LM3x"]],
+                                   en3[["vectors"]][["r"]][["LM3y"]],
+                                   en3[["vectors"]][["r"]][["LM4x"]],
+                                   en3[["vectors"]][["r"]][["LM4y"]],
+                                   en3[["vectors"]][["r"]][["LM5x"]],
+                                   en3[["vectors"]][["r"]][["LM5y"]],
+                                   en3[["vectors"]][["r"]][["LM6x"]],
+                                   en3[["vectors"]][["r"]][["LM6y"]],
+                                   en3[["vectors"]][["r"]][["LM7x"]],
+                                   en3[["vectors"]][["r"]][["LM7y"]],
+                                   en3[["vectors"]][["r"]][["LM8x"]],
+                                   en3[["vectors"]][["r"]][["LM8y"]],
+                                   en3[["vectors"]][["r"]][["LM9x"]],
+                                   en3[["vectors"]][["r"]][["LM9y"]])),
+                        P_value=(c(en3[["vectors"]][["pvals"]][["LM1x"]],
+                                   en3[["vectors"]][["pvals"]][["LM1y"]],
+                                   en3[["vectors"]][["pvals"]][["LM2x"]],
+                                   en3[["vectors"]][["pvals"]][["LM2y"]],
+                                   en3[["vectors"]][["pvals"]][["LM3x"]],
+                                   en3[["vectors"]][["pvals"]][["LM3y"]],
+                                   en3[["vectors"]][["pvals"]][["LM4x"]],
+                                   en3[["vectors"]][["pvals"]][["LM4y"]],
+                                   en3[["vectors"]][["pvals"]][["LM5x"]],
+                                   en3[["vectors"]][["pvals"]][["LM5y"]],
+                                   en3[["vectors"]][["pvals"]][["LM6x"]],
+                                   en3[["vectors"]][["pvals"]][["LM6y"]],
+                                   en3[["vectors"]][["pvals"]][["LM7x"]],
+                                   en3[["vectors"]][["pvals"]][["LM7y"]],
+                                   en3[["vectors"]][["pvals"]][["LM8x"]],
+                                   en3[["vectors"]][["pvals"]][["LM8y"]],
+                                   en3[["vectors"]][["pvals"]][["LM9x"]],
+                                   en3[["vectors"]][["pvals"]][["LM9y"]])),
+                        Mainland=(c(mean(main_mean$LM1x),
+                                 mean(main_mean$LM1y),
+                                 mean(main_mean$LM2x),
+                                 mean(main_mean$LM2y),
+                                 mean(main_mean$LM3x),
+                                 mean(main_mean$LM3y),
+                                 mean(main_mean$LM4x),
+                                 mean(main_mean$LM4y),
+                                 mean(main_mean$LM5x),
+                                 mean(main_mean$LM5y),
+                                 mean(main_mean$LM6x),
+                                 mean(main_mean$LM6y),
+                                 mean(main_mean$LM7x),
+                                 mean(main_mean$LM7y),
+                                 mean(main_mean$LM8x),
+                                 mean(main_mean$LM8y),
+                                 mean(main_mean$LM9x),
+                                 mean(main_mean$LM9y))),
+                        Island=(c(mean(island_mean$LM1x),
+                                 mean(island_mean$LM1y),
+                                 mean(island_mean$LM2x),
+                                 mean(island_mean$LM2y),
+                                 mean(island_mean$LM3x),
+                                 mean(island_mean$LM3y),
+                                 mean(island_mean$LM4x),
+                                 mean(island_mean$LM4y),
+                                 mean(island_mean$LM5x),
+                                 mean(island_mean$LM5y),
+                                 mean(island_mean$LM6x),
+                                 mean(island_mean$LM6y),
+                                 mean(island_mean$LM7x),
+                                 mean(island_mean$LM7y),
+                                 mean(island_mean$LM8x),
+                                 mean(island_mean$LM8y),
+                                 mean(island_mean$LM9x),
+                                 mean(island_mean$LM9y))))
+
+tri_table
+
+tri_mean <- lm_tripartitus_standard
+lig_mean <- lm_ligatus_standard
+far_mean <- lm_farinosus_standard
+
+species_table <- data.frame("Landmark"=(c("1x", "1y",
+                                    "2x", "2y",
+                                    "3x", "3y",
+                                    "4x", "4y",
+                                    "5x", "5y",
+                                    "6x", "6y",
+                                    "7x", "7y",
+                                    "8x", "8y",
+                                    "9x", "9y")),
+                            Rsquared=(c(en2[["vectors"]][["r"]][["LM1x"]],
+                                   en2[["vectors"]][["r"]][["LM1y"]],
+                                   en2[["vectors"]][["r"]][["LM2x"]],
+                                   en2[["vectors"]][["r"]][["LM2y"]],
+                                   en2[["vectors"]][["r"]][["LM3x"]],
+                                   en2[["vectors"]][["r"]][["LM3y"]],
+                                   en2[["vectors"]][["r"]][["LM4x"]],
+                                   en2[["vectors"]][["r"]][["LM4y"]],
+                                   en2[["vectors"]][["r"]][["LM5x"]],
+                                   en2[["vectors"]][["r"]][["LM5y"]],
+                                   en2[["vectors"]][["r"]][["LM6x"]],
+                                   en2[["vectors"]][["r"]][["LM6y"]],
+                                   en2[["vectors"]][["r"]][["LM7x"]],
+                                   en2[["vectors"]][["r"]][["LM7y"]],
+                                   en2[["vectors"]][["r"]][["LM8x"]],
+                                   en2[["vectors"]][["r"]][["LM8y"]],
+                                   en2[["vectors"]][["r"]][["LM9x"]],
+                                   en2[["vectors"]][["r"]][["LM9y"]])),
+                            P_value=(c(en2[["vectors"]][["pvals"]][["LM1x"]],
+                                   en2[["vectors"]][["pvals"]][["LM1y"]],
+                                   en2[["vectors"]][["pvals"]][["LM2x"]],
+                                   en2[["vectors"]][["pvals"]][["LM2y"]],
+                                   en2[["vectors"]][["pvals"]][["LM3x"]],
+                                   en2[["vectors"]][["pvals"]][["LM3y"]],
+                                   en2[["vectors"]][["pvals"]][["LM4x"]],
+                                   en2[["vectors"]][["pvals"]][["LM4y"]],
+                                   en2[["vectors"]][["pvals"]][["LM5x"]],
+                                   en2[["vectors"]][["pvals"]][["LM5y"]],
+                                   en2[["vectors"]][["pvals"]][["LM6x"]],
+                                   en2[["vectors"]][["pvals"]][["LM6y"]],
+                                   en2[["vectors"]][["pvals"]][["LM7x"]],
+                                   en2[["vectors"]][["pvals"]][["LM7y"]],
+                                   en2[["vectors"]][["pvals"]][["LM8x"]],
+                                   en2[["vectors"]][["pvals"]][["LM8y"]],
+                                   en2[["vectors"]][["pvals"]][["LM9x"]],
+                                   en2[["vectors"]][["pvals"]][["LM9y"]])),
+                        "Halictus tripartitus"=(c(mean(tri_mean$LM1x),
+                                 mean(tri_mean$LM1y),
+                                 mean(tri_mean$LM2x),
+                                 mean(tri_mean$LM2y),
+                                 mean(tri_mean$LM3x),
+                                 mean(tri_mean$LM3y),
+                                 mean(tri_mean$LM4x),
+                                 mean(tri_mean$LM4y),
+                                 mean(tri_mean$LM5x),
+                                 mean(tri_mean$LM5y),
+                                 mean(tri_mean$LM6x),
+                                 mean(tri_mean$LM6y),
+                                 mean(tri_mean$LM7x),
+                                 mean(tri_mean$LM7y),
+                                 mean(tri_mean$LM8x),
+                                 mean(tri_mean$LM8y),
+                                 mean(tri_mean$LM9x),
+                                 mean(tri_mean$LM9y))),
+                        "Halictus ligatus"=(c(mean(lig_mean$LM1x),
+                                 mean(lig_mean$LM1y),
+                                 mean(lig_mean$LM2x),
+                                 mean(lig_mean$LM2y),
+                                 mean(lig_mean$LM3x),
+                                 mean(lig_mean$LM3y),
+                                 mean(lig_mean$LM4x),
+                                 mean(lig_mean$LM4y),
+                                 mean(lig_mean$LM5x),
+                                 mean(lig_mean$LM5y),
+                                 mean(lig_mean$LM6x),
+                                 mean(lig_mean$LM6y),
+                                 mean(lig_mean$LM7x),
+                                 mean(lig_mean$LM7y),
+                                 mean(lig_mean$LM8x),
+                                 mean(lig_mean$LM8y),
+                                 mean(lig_mean$LM9x),
+                                 mean(lig_mean$LM9y))),
+                         "Halictus farinosus"=(c(mean(far_mean$LM1x),
+                                 mean(far_mean$LM1y),
+                                 mean(far_mean$LM2x),
+                                 mean(far_mean$LM2y),
+                                 mean(far_mean$LM3x),
+                                 mean(far_mean$LM3y),
+                                 mean(far_mean$LM4x),
+                                 mean(far_mean$LM4y),
+                                 mean(far_mean$LM5x),
+                                 mean(far_mean$LM5y),
+                                 mean(far_mean$LM6x),
+                                 mean(far_mean$LM6y),
+                                 mean(far_mean$LM7x),
+                                 mean(far_mean$LM7y),
+                                 mean(far_mean$LM8x),
+                                 mean(far_mean$LM8y),
+                                 mean(far_mean$LM9x),
+                                 mean(far_mean$LM9y))))
+species_table
+```
+
+
