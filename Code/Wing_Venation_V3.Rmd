@@ -1,0 +1,380 @@
+---
+title: "Wing_Manuscript_Revisions2"
+author: "Charles Thrift"
+date: "2023-03-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In this document, we analyze variation in wing morphologies between three species of _Halictus_ and two populations of _Halictus tripartitus_ using geometric morphometrics.
+
+This document is the _third_ version of this analysis, incorporating responses from multiple reviewers of our manuscript. Main changes include: removing ANOSIM and PCA tests and visualizations, and replacing with MANOVA and DAPC.
+
+Necessary inputs for this script include:
+(1) TPS files containing plotted landmark data for each wing photograph or "occurrence"
+(2) CSV file containing all bee occurrence data, eg. all Hymenoptera from CCBER's GBIF or Symbiota page. This is used to match the TPS wing occurrence with its proper species and population information.
+
+##Load Packages
+```{r packages, warning=FALSE, echo=FALSE, message=FALSE}
+library(tidyverse)
+library(geomorph) #NOTE: download XQuartz if using a Mac
+library(devtools)
+library(RRPP) #used for MANOVA 
+library(adegenet) # used for DAPC
+```
+
+##Load Data
+###Part One: TPS data
+The TPS data are in one file, which was created using tpsUtil32. Here, we read these data and specify a few parameters for the _readland.tps_ function. There are no curves to be read (readcurves=FALSE), and any negative values for landmarks are negative in Cartesian space (negNA=FALSE). If negNA were true, the function would read any negative landmarks as a missing landmark (this is because while landmarking, if a character is obscured you can "skip" landmarks within the landmarking software. We do not include any specimens missing any landmarks in this analysis).
+```{r}
+#Read in the TPS data for all bee wing images
+all_tps_data <- readland.tps("TPS_files/AppendedTPS_all_02sep22.TPS",
+                             specID = c("imageID"), readcurves = FALSE, 
+                             warnmsg = TRUE,negNA = FALSE)
+```
+
+###Part Two: Bee data
+Read bee data by first reading all Hymenoptera. After this chunk of code, all bee data is saved as __df1__ and is ready to be merged with the TPS data.
+```{r}
+#need to have "beedata26jun22.csv" saved in working directory
+all_CCBER_hymenoptera <- read_csv("beedata26jun22.csv")
+
+#clean up data. Only keep relevant columns
+df1 <- all_CCBER_hymenoptera
+df1 <- df1[,c("catalogNumber", "family", "genus", "scientificName",
+                   "decimalLatitude", "decimalLongitude", "eventDate",
+                   "day", "month", "year", "identifiedBy", "sex", "startDayOfYear")]
+#clean up data: prepare to match on catalogNumber
+df1 <- df1 %>% separate(catalogNumber, c("UCSB", "number")) #issue btwn _ vs - in catalogNumber
+df1 <- df1 %>% tidyr::unite('catalogNumber', sep = "_", c('UCSB','number')) #solving it by switching to _ from - in the downloaded Hymenoptera data
+```
+
+##Generalized Procrustes Analaysis (GPA)
+Run GPA on TPS data, to then generate coordinate data for each landmark on each specimen. In this code, we start with tps data and end with a CSV of coordinate data for each specimen. This can then be merged with the bee data generated above.
+```{r}
+all_tps_gpa <- gpagen(all_tps_data, PrinAxes = TRUE)
+
+write.csv(all_tps_gpa$coords, "all_tps_21mar23.csv", row.names = TRUE)
+write.csv(all_tps_gpa$Csize, "all_Csize_tps_21mar23.csv", row.names = TRUE)
+```
+
+##Merge Landmark Data with Bee Collection/Curation Data
+###Adjust the Landmark Data to usable format
+Read in the landmark data. Read in the Csize data for each specimen. Adjust each.
+```{r}
+lmdata <- read.csv("all_tps_21mar23.csv") #read landmark data in
+Csize <- read.csv("all_Csize_tps_21mar23.csv") #read Csize data in (note, not using it in this analysis)
+Csize1 <- Csize 
+Csize2 <- setNames(cbind(rownames(Csize1), Csize1, row.names = NULL), 
+         c("number_delete", "specimenID", "Csize")) #add row names
+Csize3 <- Csize2[,c(2:3)] #delete the first column (which is just numbering)
+df_transpose = t(lmdata) #transpose the landmark data
+df_transpose1 <- df_transpose
+df_transpose1 <- df_transpose1[c(2:961),]
+#Format of LM data is currently two rows per specimen
+#with one row being X coordinate values and one row
+#being Y coordinate values. Below, we split into two 
+#data frames and then stitch them back together to get
+#18 different variables for the 9 landmarks
+#(9 X coordinates and 9 Y coordinates)
+lm1 <- df_transpose1
+lmX <- lm1
+lmY <- lm1
+lmX1 <- lmX
+lmX1 <- data.frame(lmX1)
+lmX2 <- setNames(cbind(rownames(lmX1), lmX1, row.names = NULL),
+                 c("name", "LM1x", "LM2x", "LM3x",
+                   "LM4x", "LM5x", "LM6x", "LM7x", "LM8x", "LM9x"))
+lmXonly <- lmX2[str_detect(lmX2$name, "X.UCSB"), ]
+#repeat with Y
+lmY1 <- lmY
+lmY1 <- data.frame(lmY1)
+lmY2 <- setNames(cbind(rownames(lmY1), lmY1, row.names = NULL),
+                 c("name", "LM1y", "LM2y", "LM3y",
+                   "LM4y", "LM5y", "LM6y", "LM7y", "LM8y", "LM9y"))
+lmYonly <- lmY2[str_detect(lmY2$name, "Y.UCSB"), ]
+lmXonly1 <- lmXonly
+lmYonly1 <- lmYonly
+lmXonly2 <- lmXonly1 %>% 
+    tidyr::separate(name,                      
+                    c("X","UCSB", "barcode", "wing","species", 
+                      "location", "wingSide"), extra='drop') %>%
+    tidyr::unite('catalogNumber', c('UCSB','barcode')) 
+#drop any wings that were Right instead of Left
+lmXonly3 <- lmXonly2[lmXonly2$wingSide %in% c("ed", NA), ] #remove any "right" wings
+lmXonly4 <- lmXonly3[lmXonly3$species %in% c("edited", "far",
+                "lig", "tri"), ] #remove any "right" wings
+lmXonly5 <- lmXonly4[,c(2,7:15)]
+##now: lmXonly5 has x coordinate values for all 9 landmarks, and just the catalogNumber
+###repeat for Y
+lmYonly2 <- lmYonly1 %>% 
+    tidyr::separate(name,                      
+                    c("Y","UCSB", "barcode", "wing","species", 
+                      "location", "wingSide"), extra='drop') %>%
+    tidyr::unite('catalogNumber', c('UCSB','barcode')) 
+#drop any wings that were Right instead of Left
+lmYonly3 <- lmYonly2[lmYonly2$wingSide %in% c("ed", NA), ] #remove any "right" wings
+lmYonly4 <- lmYonly3[lmYonly3$species %in% c("edited", "far",
+                "lig", "tri"), ] #remove any "right" wings
+lmYonly5 <- lmYonly4[,c(2,7:15)]
+########
+#Now: unite the Y and X coordinate dataframes into just one
+lm_both <- merge(lmXonly5, lmYonly5, by=c("catalogNumber"))
+####Final step: add in the Csize column
+Csize4 <- Csize3
+Csize5 <- Csize4 %>% 
+    tidyr::separate(specimenID,                      
+                    c("UCSB", "barcode", "wing","species", 
+                      "location", "wingSide"), extra='drop') %>%
+    tidyr::unite('catalogNumber', c('UCSB','barcode')) 
+Csize6 <- Csize5[,c(1,6)]
+lm_both_size <- merge(lm_both, Csize6, by=c("catalogNumber"))
+####Done with landmark data. "lm" has each specimen and 18 variables for lm coordinates
+####plus 1 variable for Csize
+```
+
+###Merge Landmark and Curation Data
+```{r}
+lm_data <- merge(lm_both_size, df1, by=c("catalogNumber"))
+####removing some specimens from the analysis
+allsets_data123 <- lm_data
+##Need to drop the images with missing/obscured landmarks
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00041576")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00041646")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037403")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037414")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00038716")
+# drop: poor photo quality
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037491")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037465")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037432")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037425")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00012006")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00012259")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037414")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037403")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037397")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037386")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037356")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037336")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00036708")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00036688")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00035322")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00034772")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00030903")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00030503")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00030428")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00030379")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00030327")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00030289")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00030048")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00022211")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00021402")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00015171")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00012463")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00012424")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00012342")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00012277")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00012056")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00012049")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00012026")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00012018")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00041576")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00036237")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037365")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00037381")
+allsets_data123 <- subset(allsets_data123, catalogNumber != "UCSB_IZC00036773")
+lm_data_clean <- allsets_data123
+#remove 2 rows that have only Hymenoptera as their sci name
+lm_data_clean <- subset(lm_data_clean, scientificName != "Hymenoptera")
+```
+
+##Summarizing Specimens
+```{r}
+lm <- lm_data_clean
+lm$scientificName <- as.factor(lm$scientificName)
+#rename the species to be easier to use than the whole author and year format
+lm$species[lm$scientificName == 
+             "Halictus tripartitus Cockerell, 1895"]<- "H. tripartitus"
+lm$species[lm$scientificName == 
+             "Halictus ligatus Say, 1837"]<- "H. ligatus"
+lm$species[lm$scientificName == 
+             "Halictus farinosus Smith, 1853"]<- "H. farinosus"
+lm$species <- as.factor(lm$species)
+summary(lm$species)
+
+lm$location <- NA #store NA values first, then populate below with the right group
+lm$location[lm$decimalLatitude <= 34.234 & 
+                 lm$decimalLatitude >= 33.86 & 
+                 lm$decimalLongitude >= -120.05 & 
+                 lm$decimalLongitude <= -119.45]<- "Santa Cruz Island"
+lm$location[lm$decimalLatitude <= 36 & 
+                 lm$decimalLatitude >= 34.113887 & 
+                 lm$decimalLongitude >= -121 & 
+                 lm$decimalLongitude <= -116]<- "Mainland"
+lm$location <- as.factor(lm$location)
+summary(lm$location)
+lm <- subset(lm, location != "NA") #if it didn't get a population assigned, drop it from pop analysis
+## Check count of species and locations
+table(lm$species, lm$location)
+```
+## Create subset with equal numbers of specimens
+Since there are different numbers of bees from each species group and population group, we randomly select the same number of bees from each group then combine them back into a single "species-level" data frame and "population-level" data frame.
+```{r}
+lm_standard <- lm
+lm_ligatus <- subset(lm_standard, species == "H. ligatus")
+lm_tripartitus <- subset(lm_standard, species == "H. tripartitus")
+lm_farinosus <- subset(lm_standard, species == "H. farinosus")
+
+set.seed(99)
+lm_ligatus_standard <- lm_ligatus[sample(nrow(lm_ligatus),size = 43), ]
+set.seed(99)
+lm_tripartitus_standard <- lm_tripartitus[sample(nrow(lm_tripartitus),size = 43), ]
+lm_farinosus_standard <- lm_farinosus #because this is the lowest value already
+
+lm_standard_species <- rbind(lm_ligatus_standard, 
+                             lm_tripartitus_standard,
+                             lm_farinosus_standard)
+
+table(lm_standard_species$species, lm_standard_species$location)
+
+#now make a data frame with equal numbers of just h tripartitus by location
+table(lm_tripartitus$location)
+tri_main <- subset(lm_tripartitus, location == "Mainland")
+tri_island <- subset(lm_tripartitus, location == "Santa Cruz Island")
+
+##based on table, need to reduce mainland down to 149, to match island
+set.seed(99)
+tri_main_standard <- tri_main[sample(nrow(tri_main),size = 149), ]
+tri_island_standard <- tri_island #because this is the lowest value already
+tri_data_standard <- rbind(tri_main_standard, tri_island_standard)
+table(tri_data_standard$location)
+```
+
+## Make Table with Specimens Being Used
+Here, we create a csv file that shows exactly which specimens are being included in the analyses below.
+```{r}
+#each row has a different bee
+#columns: catalogNumber, species, location
+
+specimens_by_species <- lm_standard_species #for species level
+specimens_by_population <- tri_data_standard #for population level
+
+specimens_by_species <- specimens_by_species[,c(1,33:34)]
+specimens_by_population <- specimens_by_population[,c(1,33:34)]
+
+write.csv(specimens_by_species, "specimens_by_species_21fmar23.csv", row.names = TRUE)
+write.csv(specimens_by_population, "specimens_by_population_21mar23.csv", row.names = TRUE)
+```
+
+## MANOVA
+Using MANOVA to test for difference between groups using the RRPP package.
+```{r}
+# MANOVA test with three species
+manova_species <- lm_standard_species
+manova_species <- manova_species[,c(2:19,33)] #drop catalog number and other non LM variables
+manova_species_data <- manova_species[,c(1:18)] #drop species variable
+manova_species_data <- as.matrix(manova_species_data) #as matrix
+
+fit_species <- lm.rrpp(manova_species_data ~ species, SS.type = "I", 
+               data = manova_species, print.progress = FALSE) #run the linear model fit
+fitm_species <- manova.update(fit_species, print.progress = FALSE, tol = 0) #run manova update
+summary(fitm_species, test = "Pillai") #summarize with a manova table
+```
+
+
+
+```{r}
+# MANOVA for 2 populations
+tri <- tri_data_standard
+
+manova_tri <- tri 
+manova_tri <- manova_tri[,c(2:19,34)]
+manova_tri$location <- as.factor(manova_tri$location)
+manova_tri_data <- manova_tri[,c(1:18)] #removing the population column
+manova_tri_data <- as.matrix(manova_tri_data) 
+
+fit <- lm.rrpp(manova_tri_data ~ location, SS.type = "I", 
+               data = manova_tri, print.progress = FALSE) #run the linear model fit
+fitm <- manova.update(fit, print.progress = FALSE, tol = 0) #run the manova update
+summary(fitm, test = "Pillai") #summarize with a manova table
+```
+
+
+
+## DAPC
+Rather than a PCA, we run a DAPC here to visualize difference between groups.
+```{r}
+species4 <- lm_standard_species 
+species <- species4[,c(2:19)] # Only preserves LM values
+
+dapc_sp <- dapc(species,  
+                grp = species4$species, 
+                n.pca = 6,
+                n.da = 10) #run DAPC on 3 species. 
+
+species_col <- c("#E69F00","#D55E00","#0072B2") #save color values for species
+scatter(dapc_sp,1,1,bg="white", 
+        cstar=0, scree.pca=FALSE, posi.pca="topright", 
+        legend=TRUE, posi.leg="topleft", col = species_col) # plot w/ just one axis meaning just 1 DA
+
+```
+
+```{r}
+# DAPC for 2 populations
+pop4 <- tri_data_standard
+population <- pop4[,c(2:19)] # Only preserves LM values
+
+dapc_pop <- dapc(population, 
+                grp = pop4$location,
+                n.pca = 9,
+                n.da = 10) #run DAPC on 2 populations
+
+population_col <- c("darkblue", "#56B4E9") #save colors for population
+
+scatter(dapc_pop, 
+        bg="white", 
+        cstar=0, scree.pca=FALSE, posi.pca="topleft",
+        legend=TRUE, posi.leg = "topleft",
+        col = population_col) #plot the two populations
+```
+
+
+## Cross-validation using DAPC
+Assign "unknown" bees to the correct group, and test for % accuracy.
+```{r}
+species5 <- species4[,c(2:19,33)] #only save LM values and species variables
+grp1 <- species5$species #assign groups to be the species variable
+species6 <- species5[,c(1:18)] #only save LM values for analysis
+xval_sp <- xvalDapc(species6, grp1, n.pca.max = 300, n.da = NULL,
+                 training.set = 0.9,
+                 result = c("groupMean", "overall"), 
+                 center = TRUE, scale = FALSE,
+                 n.pca = NULL, n.rep = 30, xval.plot = TRUE) #run cross validation
+xval_sp$`Number of PCs Achieving Highest Mean Success` #which number of PCs retained has highest accuracy?
+xval_sp$`Mean Successful Assignment by Number of PCs of PCA` #what is accuracy at various PCs retained?
+
+
+#### NOW, repeat with the two populations instead
+pop5 <- pop4[,c(2:19,34)] #same process: only save LM and population variables
+grp2 <- pop5$location #assign grouping to be population variable
+pop6 <- pop5[,c(1:18)] #only preserve LM values
+
+xval_pop <- xvalDapc(pop6, grp2, n.pca.max = 300, n.da = NULL,
+                 training.set = 0.9,
+                 result = c("groupMean","overall"), 
+                 center = TRUE, scale = FALSE,
+                 n.pca = NULL, n.rep = 30, xval.plot = TRUE) #run cross validation
+
+xval_pop$`Number of PCs Achieving Highest Mean Success`#which number of PCs retained has highest accuracy?
+xval_pop$`Mean Successful Assignment by Number of PCs of PCA`#what is accuracy at various PCs retained?
+```
+
+
+
+
+
+
