@@ -1,9 +1,12 @@
 # Phenotypic divergence in an island bee population: Applying geometric morphometrics to discriminate population-level variation in wing venation
-Madeleine M. Ostwald, Charles N. Thrift, & Katja C. Seltmann
+[Madeleine M. Ostwald](https://orcid.org/0000-0002-9869-8835), [Charles N. Thrift](https://orcid.org/0000-0002-4257-6951), & [Katja C. Seltmann](https://orcid.org/0000-0001-5354-6048)
 
 In prep
 
 Please contact Charles Thrift for questions regarding the code or data (charliethrift@gmail.com)
+
+# Title 
+Phenotypic divergence in an island bee population: Applying geometric morphometrics to discriminate population-level variation in wing venation
 
 # Abstract
 Phenotypic divergence is an important consequence of restricted gene flow in insular
@@ -24,3 +27,7 @@ morphometrics for large-scale assessment of insect population structure.
 # Repository Directory
 ## Code: Contains code for data analysis in R
 ## Data: Contains both the CSV file and TPS file necessary for running code
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7869309.svg)](https://doi.org/10.5281/zenodo.7869309)
+
+
