@@ -4,6 +4,8 @@
 In prep
 
 Please contact Charles Thrift for questions regarding the code or data (charliethrift@gmail.com)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7869309.svg)](https://doi.org/10.5281/zenodo.7869309)
+
 
 # Title 
 Phenotypic divergence in an island bee population: Applying geometric morphometrics to discriminate population-level variation in wing venation
