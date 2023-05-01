@@ -4,6 +4,8 @@
 In prep
 
 Please contact Charles Thrift for questions regarding the code or data (charliethrift@gmail.com)
+
+
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7869309.svg)](https://doi.org/10.5281/zenodo.7869309)
 
 
@@ -30,6 +32,5 @@ morphometrics for large-scale assessment of insect population structure.
 ## Code: Contains code for data analysis in R
 ## Data: Contains both the CSV file and TPS file necessary for running code
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7869309.svg)](https://doi.org/10.5281/zenodo.7869309)
 
 
