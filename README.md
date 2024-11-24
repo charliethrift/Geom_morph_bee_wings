@@ -1,7 +1,7 @@
 # Phenotypic divergence in an island bee population: Applying geometric morphometrics to discriminate population-level variation in wing venation
 [Madeleine M. Ostwald](https://orcid.org/0000-0002-9869-8835), [Charles N. Thrift](https://orcid.org/0000-0002-4257-6951), & [Katja C. Seltmann](https://orcid.org/0000-0001-5354-6048)
 
-In prep
+Published in [Ecology and Evolution](https://onlinelibrary.wiley.com/doi/10.1002/ece3.10085). 
 
 Please contact Charles Thrift for questions regarding the code or data (charliethrift@gmail.com)
 
